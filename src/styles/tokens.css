@@ -1,0 +1,64 @@
+/* Zira Backoffice — tokens (source : design system Zira Backoffice, tokens.json) */
+:root, [data-theme="light"] {
+  --zira-primary: #1C3557;
+  --zira-primary-hover: #152A45;
+  --zira-primary-soft: #E8EEF5;
+  --zira-accent: #2563EB;
+  --zira-accent-hover: #1D4ED8;
+  --zira-accent-soft: #EFF6FF;
+  --zira-background: #F8FAFC;
+  --zira-surface: #FFFFFF;
+  --zira-surface-muted: #F1F5F9;
+  --zira-border: #E2E8F0;
+  --zira-border-strong: #8594A8;
+  --zira-text-primary: #0F172A;
+  --zira-text-secondary: #64748B;
+  --zira-text-disabled: #CBD5E1;
+  --zira-text-on-primary: #FFFFFF;
+  --zira-text-on-primary-muted: #B4C3D7;
+  --zira-status-active: #16A34A;
+  --zira-status-active-soft: #DCFCE7;
+  --zira-status-active-ink: #166534;
+  --zira-status-maintenance: #F59E0B;
+  --zira-status-maintenance-soft: #FEF3C7;
+  --zira-status-maintenance-ink: #92400E;
+  --zira-status-inactive: #EF4444;
+  --zira-status-inactive-soft: #FEE2E2;
+  --zira-status-inactive-ink: #991B1B;
+  --zira-status-available: #2563EB;
+  --zira-status-available-soft: #DBEAFE;
+  --zira-status-available-ink: #1E40AF;
+  --zira-focus-ring: var(--zira-accent);
+  --zira-overlay: rgba(15, 23, 42, 0.45);
+  --zira-shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.06);
+  --zira-shadow-overlay: 0 12px 32px rgba(15, 23, 42, 0.18), 0 2px 6px rgba(15, 23, 42, 0.08);
+}
+:root {
+  --zira-space-1: 4px;
+  --zira-space-2: 8px;
+  --zira-space-3: 12px;
+  --zira-space-4: 16px;
+  --zira-space-5: 20px;
+  --zira-space-6: 24px;
+  --zira-space-8: 32px;
+  --zira-space-10: 40px;
+  --zira-radius-sm: 8px;
+  --zira-radius-md: 12px;
+  --zira-radius-lg: 16px;
+  --zira-radius-pill: 999px;
+  --zira-sidebar-width: 248px;
+  --zira-header-height: 64px;
+  --zira-content-max: 1440px;
+  --font-sans: var(--font-outfit), system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+.zira-display { font-family: var(--font-sans); font-size: 32px; line-height: 40px; font-weight: 700; letter-spacing: -0.01em; }
+.zira-title-page { font-family: var(--font-sans); font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -0.005em; }
+.zira-title-section { font-family: var(--font-sans); font-size: 18px; line-height: 26px; font-weight: 600; }
+.zira-title-card { font-family: var(--font-sans); font-size: 15px; line-height: 22px; font-weight: 600; }
+.zira-metric { font-family: var(--font-sans); font-size: 30px; line-height: 36px; font-weight: 600; }
+.zira-body { font-family: var(--font-sans); font-size: 14px; line-height: 20px; font-weight: 400; }
+.zira-body-strong { font-family: var(--font-sans); font-size: 14px; line-height: 20px; font-weight: 500; }
+.zira-small { font-family: var(--font-sans); font-size: 13px; line-height: 18px; font-weight: 400; }
+.zira-label { font-family: var(--font-sans); font-size: 12px; line-height: 16px; font-weight: 500; letter-spacing: 0.02em; }
+.zira-code { font-family: var(--font-mono); font-size: 12.5px; line-height: 18px; font-weight: 400; }
