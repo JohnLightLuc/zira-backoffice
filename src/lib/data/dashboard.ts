@@ -3,6 +3,7 @@ import { AggregateField, Timestamp } from "firebase-admin/firestore";
 import { db } from "@/lib/firebase/admin";
 import { isDemo } from "@/lib/env";
 import { getDeviceCounts } from "@/lib/data/devices";
+import { orNull } from "@/lib/data/safe";
 import type { Dashboard, Period, SubStatus } from "@/lib/data/types";
 import type { StaffSession } from "@/lib/auth/session";
 
@@ -36,7 +37,7 @@ const STATUSES: SubStatus[] = ["active", "trial", "expiring", "expired", "cancel
 
 export async function getDashboard(period: Period, staff: StaffSession): Promise<Dashboard> {
   const r = periodRange(period);
-  const devices = await getDeviceCounts(30, staff).catch(() => null);
+  const devices = await orNull(getDeviceCounts(30));
   const deviceBlock = { online: devices?.online ?? null, total: devices?.total ?? null, silent: devices?.silent ?? null };
 
   if (isDemo()) return demoDashboard(period, r, deviceBlock);

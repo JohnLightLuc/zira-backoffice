@@ -4,6 +4,9 @@ import { Lock } from "lucide-react";
 import { Alert, AuditTimeline, Card, iconProps, LINK_UI, PageHeader, SignalAge, Source, StatusBadge, SUB_UI } from "@/components/ui";
 import { CopyButton } from "@/components/client";
 import { ClientAccessButton } from "@/components/actions";
+import { ClientNoteForm, DeviceLinkForm, SubscriptionAdjustForm } from "@/components/forms";
+import { getPlans } from "@/lib/data/plans";
+import { orNull } from "@/lib/data/safe";
 import { requirePagePermission } from "@/lib/auth/session";
 import { can } from "@/lib/auth/rbac";
 import { getClientOverview } from "@/lib/data/clients";
@@ -26,9 +29,13 @@ export default async function ClientPage({ params, searchParams }: { params: Pro
   const sub = c.subscription;
   const subUi = sub ? SUB_UI[sub.status] : null;
   const canSuspend = can(staff.role, "clients:suspend");
+  const canAdjust = can(staff.role, "subscriptions:adjust") && sub != null;
+  const canNote = can(staff.role, "clients:note");
+  const canLink = can(staff.role, "devices:write");
+  const plans = canAdjust ? (await orNull(getPlans())) ?? [] : [];
   const meta = `${c.profile.email ?? "sans e-mail"}${sub ? ` · Plan ${sub.planId}` : ""}`;
   const now = Date.now();
-  const lastSuspend = c.audit.find((a) => a.action === "Compte suspendu" && a.result === "success");
+  const lastSuspend = c.audit?.find((a) => a.code === "client.suspend" && a.result === "success");
 
   return (
     <>
@@ -55,7 +62,7 @@ export default async function ClientPage({ params, searchParams }: { params: Pro
       <nav className="zr-tabs" aria-label="Sections de la fiche">
         {TABS.map(([k, l]) => (
           <Link key={k} href={`/clients/${encodeURIComponent(uid)}${k === "overview" ? "" : `?tab=${k}`}`} aria-current={tab === k ? "page" : undefined} scroll={false}>
-            {l}{k === "fleet" ? ` (${c.fleet.length})` : k === "history" ? ` (${c.audit.length})` : ""}
+            {l}{k === "fleet" ? ` (${c.fleet.length})` : k === "history" && c.audit ? ` (${c.audit.length})` : ""}
           </Link>
         ))}
       </nav>
@@ -82,7 +89,7 @@ export default async function ClientPage({ params, searchParams }: { params: Pro
               </dl>
             </Card>
             <Card title="Abonnement et droits" aside={<Source>subscriptions/{"{uid}"}</Source>}>
-              {sub && subUi ? (
+              {sub && subUi ? (<>
                 <dl className="zr-dl">
                   <dt>Plan</dt><dd><b>{sub.planId}</b><StatusBadge status={subUi.tone}>{subUi.label}</StatusBadge></dd>
                   <dt>Fin de période</dt><dd>{fmtDate(sub.endDate)}</dd>
@@ -90,12 +97,25 @@ export default async function ClientPage({ params, searchParams }: { params: Pro
                   <dt>Renouvellement</dt><dd>{sub.autoRenew == null ? "—" : sub.autoRenew ? "Automatique" : "Désactivé"}</dd>
                   <dt>Volumes</dt><dd>{fmtNumber(c.counts.vehicles)} véhicules · {fmtNumber(c.counts.drivers)} chauffeurs · {fmtNumber(c.counts.documents)} documents</dd>
                 </dl>
-              ) : <p className="zr-muted" style={{ margin: 0 }}>Aucun document subscriptions/{"{uid}"}.</p>}
+                {canAdjust && (
+                  <div style={{ marginTop: 16 }}>
+                    <SubscriptionAdjustForm
+                      uid={uid}
+                      clientName={c.profile.name}
+                      plans={plans.some((p) => p.id === sub.planId) ? plans : [{ id: sub.planId, name: sub.planId }, ...plans]}
+                      initial={{ planId: sub.planId, status: sub.status === "expiring" ? "active" : sub.status === "free" ? "" : sub.status, endDate: sub.endDate }}
+                    />
+                  </div>
+                )}
+              </>) : <p className="zr-muted" style={{ margin: 0 }}>Aucun document subscriptions/{"{uid}"}.</p>}
             </Card>
           </div>
         </>
       )}
 
+      {tab === "fleet" && c.devicesSource === "unavailable" && (
+        <Alert tone="warning" title="Devices non vérifiés">L&apos;API d&apos;administration (GET /admin/v1/devices?clientId=) n&apos;a pas répondu : les rattachements ne sont pas vérifiés.</Alert>
+      )}
       {tab === "fleet" && (
         <div className="zr-card zr-table-wrap">
           <div className="zr-table-scroll">
@@ -109,7 +129,10 @@ export default async function ClientPage({ params, searchParams }: { params: Pro
                     <td>{f.device ? <><span className="zr-code">{f.device.id}</span><span className="zr-cell-sub">{f.device.uniqueId}</span></> : <span className="zr-muted">—</span>}</td>
                     <td>{f.device && f.link !== "unverified" ? <SignalAge lastUpdate={f.device.lastUpdate} disabled={f.device.disabled} now={now} /> : <span className="zr-muted">—</span>}</td>
                     <td><StatusBadge status={LINK_UI[f.link].tone}>{LINK_UI[f.link].label}</StatusBadge></td>
-                    <td style={{ textAlign: "right" }}>{f.device && <Link className="zr-link" href={`/devices?device=${encodeURIComponent(f.device.id)}`}>Voir le device</Link>}</td>
+                    <td style={{ textAlign: "right" }}>
+                      {f.device && <Link className="zr-link" href={`/devices?device=${encodeURIComponent(f.device.id)}`}>Voir le device</Link>}
+                      {!f.device && canLink && <DeviceLinkForm ownerId={uid} vehicleId={f.vehicleId} label="Rattacher un device" size="sm" />}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -119,10 +142,24 @@ export default async function ClientPage({ params, searchParams }: { params: Pro
       )}
 
       {tab === "history" && (
-        <div style={{ maxWidth: 760 }}>
-          <Card title="Historique des actions support" aside={<Source>admin_audit_logs</Source>}>
-            <AuditTimeline entries={c.audit} />
+        <div style={{ maxWidth: 760, display: "flex", flexDirection: "column", gap: 16 }}>
+          <Card title="Historique des actions support" aside={<Source>GET /admin/v1/audit-logs</Source>}>
+            {c.audit ? <AuditTimeline entries={c.audit} /> : <p className="zr-muted" style={{ margin: 0 }}>{can(staff.role, "audit:read") ? "Journal d'audit indisponible." : `Journal d'audit non accessible au rôle ${staff.role}.`}</p>}
           </Card>
+          {c.notes && (
+            <Card title="Notes internes" aside={canNote ? <ClientNoteForm uid={uid} clientName={c.profile.name} /> : <Source>GET /admin/v1/clients/{"{uid}"}/notes</Source>}>
+              {c.notes.length ? (
+                <ol style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 12 }}>
+                  {c.notes.map((n) => (
+                    <li key={n.id}>
+                      <div className="zr-muted" style={{ fontSize: 12.5 }}>{n.author} · {fmtDateTime(n.at)}</div>
+                      <div style={{ whiteSpace: "pre-wrap" }}>{n.body}</div>
+                    </li>
+                  ))}
+                </ol>
+              ) : <p className="zr-muted" style={{ margin: 0 }}>Aucune note.</p>}
+            </Card>
+          )}
         </div>
       )}
     </>

@@ -36,7 +36,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         {d.devicesOnline.total != null ? (
           <MetricCard label="Devices en ligne" period="Maintenant" value={fmtNumber(d.devicesOnline.online)} unit={`/ ${fmtNumber(d.devicesOnline.total)}`} status={{ tone: "maintenance", label: `${fmtNumber(d.devicesOnline.silent)} silencieux` }} definition="dernier signal reçu il y a moins de 30 min." source="Traccar via API admin" />
         ) : (
-          <MetricCard label="Devices en ligne" period="Maintenant" value="—" status={{ tone: "neutral", label: "Source non connectée" }} definition="nécessite GET /admin/v1/devices/stats côté backend." />
+          <MetricCard label="Devices en ligne" period="Maintenant" value="—" status={{ tone: "neutral", label: "Source non connectée" }} definition="nécessite GET /admin/v1/devices (API d'administration injoignable ou non configurée)." />
         )}
       </div>
 

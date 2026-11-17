@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { assertPermission } from "@/lib/auth/session";
 import { getClientsPage } from "@/lib/data/clients";
 import { clientsQuerySchema } from "@/lib/data/clients-query";
-import { writeAudit } from "@/lib/data/audit";
+import { writeExportAudit } from "@/lib/data/audit";
 import { newRequestId } from "@/lib/format";
 import type { ClientRow } from "@/lib/data/types";
 
@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
   };
   const csv = [cols.join(";"), ...rows.slice(0, MAX_ROWS).map((r) => cols.map((c) => esc(r[c])).join(";"))].join("\n");
 
-  await writeAudit({ staff, action: `Export CSV clients (${rows.length} lignes)`, targetType: "client", targetId: "*", ownerUid: null, result: "read", requestId, reason: JSON.stringify({ q: q.q, plan: q.plan, sub: q.sub }) });
+  await writeExportAudit(staff, requestId, Math.min(rows.length, MAX_ROWS), { q: q.q || null, plan: q.plan ?? null, sub: q.sub ?? null });
 
   return new NextResponse("﻿" + csv, {
     headers: {

@@ -10,9 +10,9 @@ const schema = z.object({
   FIREBASE_PROJECT_ID: z.string().optional(),
   FIREBASE_CLIENT_EMAIL: z.string().optional(),
   FIREBASE_PRIVATE_KEY: z.string().optional(),
-  ZIRA_ADMIN_API_URL: z.url().optional().or(z.literal("")),
-  ZIRA_ADMIN_API_TOKEN: z.string().optional(),
-  SESSION_DAYS: z.coerce.number().int().min(1).max(14).default(1),
+  // Base URL of fleet_backend (NestJS); routes are prefixed with /admin/v1 (BACKOFFICE_API.md §4.1).
+  // Calls are authenticated with the staff member's Firebase ID token: no service token here.
+  ADMIN_API_URL: z.url().optional().or(z.literal("")),
   ZIRA_REQUIRE_MFA: z.string().optional().transform((v) => v !== "false"),
 });
 
@@ -36,4 +36,5 @@ export function env(): ServerEnv {
 }
 
 export const isDemo = () => env().ZIRA_DEMO_MODE;
-export const hasAdminApi = () => Boolean(env().ZIRA_ADMIN_API_URL);
+/** Demo mode serves the in-memory /admin/v1 implementation, so the API is always "connected" there. */
+export const hasAdminApi = () => isDemo() || Boolean(env().ADMIN_API_URL);

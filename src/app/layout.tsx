@@ -21,7 +21,9 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="fr" className={outfit.variable}>
+    // suppressHydrationWarning: browser extensions inject attributes on <html> (e.g. webcrx) before
+    // React hydrates. Only silences attribute diffs on this element, not on its children.
+    <html lang="fr" className={outfit.variable} suppressHydrationWarning>
       <body>{children}</body>
     </html>
   );

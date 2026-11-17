@@ -5,10 +5,11 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useId, useRef, useState, useTransition, type ReactNode } from "react";
 import clsx from "clsx";
 import {
-  Activity, Calendar, Copy, CreditCard, FileText, LayoutDashboard, LogOut, MapPin, Search, ShieldCheck, Truck, Users, UserX, type LucideIcon,
+  Activity, Calendar, Copy, CreditCard, FileText, LayoutDashboard, LogOut, MapPin, Search, ShieldCheck, Truck, UserCog, Users, UserX, type LucideIcon,
 } from "lucide-react";
 import { Alert, Button, iconProps } from "@/components/ui";
 import type { ActionResult } from "@/lib/actions";
+import { REASON_MIN } from "@/lib/admin-api/schemas";
 
 /* Interactive pieces. Permissions are decided on the server and passed in as props. */
 
@@ -26,6 +27,7 @@ const NAV: ({ group: string } | { href: string; label: string; icon: LucideIcon;
   { group: "Exploitation" },
   { href: "/health", label: "Santé système", icon: Activity, key: "health" },
   { href: "/audit", label: "Journal d'audit", icon: ShieldCheck, key: "audit" },
+  { href: "/staff", label: "Personnel", icon: UserCog, key: "staff" },
 ];
 
 export function NavLinks({ hidden, counts }: { hidden: string[]; counts: Record<string, number> }) {
@@ -60,6 +62,9 @@ export function LogoutButton({ demo }: { demo: boolean }) {
       title={demo ? "Mode démo : pas de session" : "Se déconnecter"}
       onClick={async () => {
         if (demo) return;
+        // Sign the Firebase client out first so SessionSync cannot re-post a token.
+        const { clientAuth } = await import("@/lib/firebase/client");
+        try { await clientAuth().signOut(); } catch { /* Firebase Web not configured or already signed out */ }
         await fetch("/api/session", { method: "DELETE" });
         router.replace("/login");
       }}
@@ -138,7 +143,7 @@ export function ConfirmAction(props: {
   const router = useRouter();
   const titleId = useId(), reasonId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
-  const min = props.minReason ?? 10;
+  const min = props.minReason ?? REASON_MIN;
   const tone = props.tone ?? "danger";
 
   useEffect(() => {
@@ -159,11 +164,14 @@ export function ConfirmAction(props: {
   }, [open, pending]);
 
   const openDialog = () => { idem.current = crypto.randomUUID(); setReason(""); setResult(null); setOpen(true); };
+  // One Idempotency-Key per intention: kept for retries of the same action, renewed when the
+  // operator edits the form (BACKOFFICE_API.md §4.8).
   const confirm = () => start(async () => {
     const r = await props.run(reason.trim(), idem.current);
     setResult(r);
     if (r.ok) { setOpen(false); router.refresh(); }
   });
+  const onReason = (v: string) => { if (result && !result.ok) idem.current = crypto.randomUUID(); setReason(v); };
   const Icon = props.trigger.icon ?? UserX;
 
   return (
@@ -171,7 +179,7 @@ export function ConfirmAction(props: {
       <Button variant={props.trigger.variant} icon={props.trigger.icon} onClick={openDialog}>{props.trigger.label}</Button>
       {result?.ok && !open && (
         <div style={{ position: "fixed", right: 24, bottom: 24, zIndex: 60, maxWidth: 420 }}>
-          <Alert tone="success">{result.message} <span className="zr-code">{result.requestId}</span></Alert>
+          <Alert tone={result.ok && result.changed === false ? "info" : "success"}>{result.message} {result.requestId && <span className="zr-code">{result.requestId}</span>}</Alert>
         </div>
       )}
       {open && (
@@ -189,10 +197,10 @@ export function ConfirmAction(props: {
               <Alert tone={tone === "warning" ? "warning" : "danger"} title="Conséquence">{props.consequence}</Alert>
               <div className="zr-field">
                 <label htmlFor={reasonId}>Motif (obligatoire)</label>
-                <textarea id={reasonId} rows={3} value={reason} maxLength={500} placeholder="Ex. : demande du client par e-mail, ticket #…" onChange={(e) => setReason(e.target.value)} />
+                <textarea id={reasonId} rows={3} value={reason} maxLength={500} placeholder="Ex. : demande du client par e-mail, ticket #…" onChange={(e) => onReason(e.target.value)} />
                 <span className="zr-field__help">Minimum {min} caractères. Visible dans le journal d&apos;audit.</span>
               </div>
-              {result && !result.ok && <Alert tone="danger">{result.message} <span className="zr-code">{result.requestId}</span></Alert>}
+              {result && !result.ok && <Alert tone="danger">{result.message} {result.requestId && <span className="zr-code">{result.requestId}</span>}</Alert>}
             </div>
             <div className="zr-dialog__foot">
               <span className="zr-dialog__audit"><ShieldCheck {...iconProps} size={15} />Action journalisée</span>

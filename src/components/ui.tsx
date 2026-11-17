@@ -74,6 +74,7 @@ export const LINK_UI: Record<LinkState | "no_device", { tone: Tone; label: strin
   ok: { tone: "active", label: "Cohérent" },
   missing_in_traccar: { tone: "inactive", label: "Absent de Traccar" },
   unlinked: { tone: "maintenance", label: "Sans rattachement" },
+  inconsistent: { tone: "maintenance", label: "Incohérent" },
   unverified: { tone: "neutral", label: "Non vérifié" },
   no_device: { tone: "neutral", label: "Sans device" },
 };
@@ -170,7 +171,8 @@ export function AuditTimeline({ entries }: { entries: AuditEntry[] }) {
                 <span>→ <span className="zr-code">{e.targetType}/{e.targetId}</span></span>
                 <span>· req <span className="zr-code">{e.requestId}</span></span>
               </div>
-              {e.change && <div className="zr-audit__diff"><span className="zr-muted">{e.change.field} :</span><s>{e.change.before}</s><span aria-hidden="true">→</span><b>{e.change.after}</b></div>}
+              {(e.changes ?? (e.change ? [e.change] : [])).slice(0, 4).map((c) => <div key={c.field} className="zr-audit__diff"><span className="zr-muted">{c.field} :</span><s>{c.before}</s><span aria-hidden="true">→</span><b>{c.after}</b></div>)}
+              {e.error && <div className="zr-audit__reason" style={{ color: "var(--zira-danger, #b42318)" }}>Erreur : {e.error}</div>}
               {e.reason && <div className="zr-audit__reason">« {e.reason} »</div>}
             </div>
           </li>

@@ -11,6 +11,9 @@ match /admin_client_index/{uid} {
 match /admin_audit_logs/{id} {
   allow read, write: if false;
 }
+match /admin_client_notes/{id} {
+  allow read, write: if false;
+}
 ```
 
 Intégrité append-only du journal d'audit : le compte de service du backoffice ne doit avoir

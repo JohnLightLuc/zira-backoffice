@@ -3,13 +3,16 @@ import { z } from "zod";
 import { adminAuth } from "@/lib/firebase/admin";
 import { env, isDemo } from "@/lib/env";
 import { isStaffRole } from "@/lib/auth/rbac";
-import { SESSION_COOKIE } from "@/lib/auth/session";
+import { SESSION_COOKIE, SESSION_MAX_AGE } from "@/lib/auth/session";
 
 /**
- * Exchanges a fresh Firebase ID token for an HttpOnly session cookie (spec §8).
- * - only accounts carrying a `staffRole` custom claim are accepted (provisioned manually);
+ * Stores the current Firebase ID token in an HttpOnly cookie (BACKOFFICE_API.md §2.2).
+ * The admin API only accepts ID tokens, so the browser re-posts the token each time the
+ * Firebase SDK refreshes it (onIdTokenChanged), and the cookie lives as long as the token (1 h).
+ * - only accounts carrying a `staffRole` custom claim get a cookie (provisioned manually);
+ * - the token is verified with checkRevoked (suspended account / changed role → refused);
  * - MFA is required unless ZIRA_REQUIRE_MFA=false (staging only);
- * - same-origin check against CSRF; the token must be recent (fresh sign-in).
+ * - same-origin check against CSRF.
  */
 export const runtime = "nodejs";
 
@@ -18,42 +21,43 @@ function sameOrigin(req: NextRequest) {
   return origin !== null && origin === req.nextUrl.origin;
 }
 
+function setCookie(res: NextResponse, value: string, maxAge: number) {
+  res.cookies.set(SESSION_COOKIE, value, { httpOnly: true, secure: true, sameSite: "lax", path: "/", maxAge });
+}
+
 export async function POST(req: NextRequest) {
-  if (isDemo()) return NextResponse.json({ code: "DEMO", message: "Mode démo : pas de session réelle." }, { status: 400 });
-  if (!sameOrigin(req)) return NextResponse.json({ code: "CSRF", message: "Origine refusée" }, { status: 403 });
+  if (isDemo()) return NextResponse.json({ message: "Mode démo : pas de session réelle." }, { status: 400 });
+  if (!sameOrigin(req)) return NextResponse.json({ message: "Origine refusée" }, { status: 403 });
 
   const body = z.object({ idToken: z.string().min(20).max(4096) }).safeParse(await req.json().catch(() => null));
-  if (!body.success) return NextResponse.json({ code: "BAD_REQUEST", message: "Requête invalide" }, { status: 400 });
+  if (!body.success) return NextResponse.json({ message: "Requête invalide" }, { status: 400 });
 
+  let decoded;
   try {
-    const decoded = await adminAuth().verifyIdToken(body.data.idToken, true);
-    if (Date.now() / 1000 - decoded.auth_time > 5 * 60) {
-      return NextResponse.json({ code: "STALE_LOGIN", message: "Reconnectez-vous." }, { status: 401 });
-    }
-    if (!isStaffRole(decoded.staffRole)) {
-      return NextResponse.json({ code: "NOT_STAFF", message: "Ce compte n'a pas accès au backoffice." }, { status: 403 });
-    }
-    if (env().ZIRA_REQUIRE_MFA && !decoded.firebase.sign_in_second_factor) {
-      return NextResponse.json({ code: "MFA_REQUIRED", message: "La double authentification est obligatoire pour le personnel." }, { status: 403 });
-    }
-    const expiresIn = env().SESSION_DAYS * 24 * 3600 * 1000;
-    const cookie = await adminAuth().createSessionCookie(body.data.idToken, { expiresIn });
-    const res = NextResponse.json({ ok: true });
-    res.cookies.set(SESSION_COOKIE, cookie, { httpOnly: true, secure: true, sameSite: "strict", path: "/", maxAge: expiresIn / 1000 });
-    return res;
+    decoded = await adminAuth().verifyIdToken(body.data.idToken, true);
   } catch {
-    return NextResponse.json({ code: "UNAUTHENTICATED", message: "Connexion refusée." }, { status: 401 });
+    const res = NextResponse.json({ message: "Session expirée ou révoquée : reconnectez-vous." }, { status: 401 });
+    setCookie(res, "", 0);
+    return res;
   }
+  if (!isStaffRole(decoded.staffRole)) {
+    const res = NextResponse.json({ message: "Accès réservé au personnel Zira." }, { status: 403 });
+    setCookie(res, "", 0);
+    return res;
+  }
+  if (env().ZIRA_REQUIRE_MFA && !decoded.firebase.sign_in_second_factor) {
+    return NextResponse.json({ message: "La double authentification est obligatoire pour le personnel." }, { status: 403 });
+  }
+  // Cookie never outlives the token it carries.
+  const maxAge = Math.max(0, Math.min(SESSION_MAX_AGE, Math.floor(decoded.exp - Date.now() / 1000)));
+  const res = new NextResponse(null, { status: 204 });
+  setCookie(res, body.data.idToken, maxAge);
+  return res;
 }
 
 export async function DELETE(req: NextRequest) {
-  if (!sameOrigin(req)) return NextResponse.json({ code: "CSRF", message: "Origine refusée" }, { status: 403 });
-  const token = req.cookies.get(SESSION_COOKIE)?.value;
-  if (token && !isDemo()) {
-    // revoke refresh tokens so the session cookie cannot be reused elsewhere
-    await adminAuth().verifySessionCookie(token).then((d) => adminAuth().revokeRefreshTokens(d.sub)).catch(() => {});
-  }
-  const res = NextResponse.json({ ok: true });
-  res.cookies.set(SESSION_COOKIE, "", { httpOnly: true, secure: true, sameSite: "strict", path: "/", maxAge: 0 });
+  if (!sameOrigin(req)) return NextResponse.json({ message: "Origine refusée" }, { status: 403 });
+  const res = new NextResponse(null, { status: 204 });
+  setCookie(res, "", 0);
   return res;
 }

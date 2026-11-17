@@ -15,7 +15,7 @@ npm run dev                     # http://localhost:3000
 Le mode démo sert des données fictives anonymisées, sans Firebase ni connexion. Le rôle simulé se change avec `ZIRA_DEMO_ROLE` (`super_admin`, `support`, `billing`, `viewer`). Il est **refusé au démarrage** si `NEXT_PUBLIC_ZIRA_ENV=production`.
 
 ```bash
-npm test          # RBAC, masquage des secrets, pagination complète, filtres devices
+npm test          # matrice RBAC §3, transport /admin/v1, schémas, contrat de bout en bout, mappers
 npm run typecheck
 npm run build
 ```
@@ -27,12 +27,15 @@ npm run build
 | Tableau de bord (7.1) | `/` `?period=day\|week\|month\|custom` | agrégats Firestore `count()` / `sum()` + stats devices via API admin |
 | Clients (7.2) | `/clients` `?q=&plan=&sub=&sort=&dir=&cursor=` | projection `admin_client_index` |
 | Fiche client (7.2) | `/clients/[uid]` `?tab=fleet\|history` | `users`, `subscriptions`, Auth, compteurs par `ownerId`, audit |
-| Parc & GPS (7.4) | `/devices` `?status=&q=&device=` | API admin Zira (Traccar) |
+| Parc & GPS (7.4) | `/devices` `?status=&clientId=&cursor=&device=` | API admin Zira (Traccar) |
 | Export CSV | `/api/clients/export` | rôles `billing`, `super_admin`, audité |
 | Connexion | `/login` → `/api/session` | Firebase Auth + MFA → cookie HttpOnly |
-| Abonnements, Activité, Documents, Santé, Audit | pages d'attente | prérequis listés sur chaque page |
+| Personnel (`/staff`) | API admin | `GET/POST /admin/v1/staff`, `PATCH /admin/v1/staff/:uid`, suspension via `PATCH /admin/v1/clients/:uid/access` — `super_admin` uniquement |
+| Santé (`/health`), Journal d'audit (`/audit`) | API admin | `GET /admin/v1/health`, `GET /admin/v1/audit-logs` (filtres, curseur) |
+| Abonnements (`/subscriptions`) `?status=&plan=&dir=&cursor=` | `subscriptions` (Admin SDK) + `plans` + audit | ajustement via `POST /admin/v1/subscriptions/:uid/adjustments` |
+| Activité, Documents | pages d'attente | prérequis listés sur chaque page |
 
-Actions sensibles (Server Actions, `src/lib/actions.ts`) : **suspendre / réactiver un compte**, **désactiver un device**. Chacune valide l'entrée, revérifie le rôle côté serveur, exige un motif (≥ 10 caractères) et une clé d'idempotence, passe par l'API admin et écrit une entrée d'audit en cas de succès **et** d'échec.
+Actions sensibles (Server Actions, `src/lib/actions.ts`, formulaires dans `src/components/forms.tsx`) : suspendre / réactiver un compte, ajouter une note, ajuster un abonnement, modifier / désactiver / réactiver / rattacher un device, gérer le staff. Chacune valide l'entrée (schémas alignés sur les DTO backend), revérifie le rôle pour un message clair, exige un motif (5 à 500 caractères) et une `Idempotency-Key` par intention, puis appelle `/admin/v1`. **L'audit est écrit par le backend** (succès et échec) ; `changed: false` s'affiche « Aucun changement ».
 
 ## Architecture
 
@@ -46,8 +49,10 @@ src/
   components/client.tsx  navigation, recherche, filtre de période, dialogue de confirmation
   lib/auth/              rôles, permissions, session staff
   lib/data/              fonctions serveur typées : getClientsPage, getClientOverview, getDashboard, getDevicesPage…
-  lib/admin-api.ts       client typé des routes /admin/v1 (à créer côté backend)
-  lib/actions.ts         mutations sensibles
+  lib/admin-api/         contrat /admin/v1 (BACKOFFICE_API.md) : types, schémas Zod, transport,
+                         client serveur, implémentation mémoire du contrat pour le mode démo
+  lib/actions.ts         mutations sensibles (Server Actions)
+  components/session-sync.tsx  rafraîchit le cookie __session (ID token) via onIdTokenChanged
   styles/tokens.css      tokens --zira-* (générés depuis le design system)
 ```
 
@@ -59,21 +64,16 @@ Principes appliqués : Admin SDK uniquement côté serveur (`server-only`), aucu
 2. **Comptes du personnel** : inscrire le second facteur (SMS) puis `npx tsx scripts/set-staff-role.ts agent@zira.ci support`.
 3. **Projection clients** : `npx tsx scripts/backfill-client-index.ts --write`, puis la maintenir par des triggers dans `functions/` (écriture sur `users`, `subscriptions`, `vehicles`). `listUsers` n'étant pas un moteur de recherche (spec §8), la liste, la recherche et le tableau de bord lisent cette projection.
 4. **Index et règles** : `firebase deploy --only firestore:indexes` avec `firestore.indexes.json`. Fusionner `firestore.rules.backoffice.md` dans les règles. Une combinaison filtre + tri sans index renvoie une erreur Firestore avec le lien de création.
-5. **API d'administration** : renseigner `ZIRA_ADMIN_API_URL` et `ZIRA_ADMIN_API_TOKEN`.
+5. **API d'administration** : renseigner `ADMIN_API_URL` (`http://localhost:3000` en local, `https://api.zira.ci` en production). Les appels portent l'ID token Firebase du membre du personnel : le projet Firebase doit être le même que celui du backend.
 
-### Prérequis backend (routes proposées, à créer — spec §8)
+### Intégration de l'API d'administration (`BACKOFFICE_API.md`)
 
-Aucune de ces routes n'existe aujourd'hui. Sans elles, le parc affiche « Source Traccar non connectée » et les actions répondent « API d'administration non branchée » : rien n'est simulé hors mode démo.
-
-| Méthode / route | Utilisée par |
-|---|---|
-| `GET /admin/v1/devices?status=&q=&clientId=&staleMinutes=&cursor=` | Parc, fiche client |
-| `GET /admin/v1/devices/stats?staleMinutes=` | Tableau de bord, Parc |
-| `GET /admin/v1/devices/{id}` · `GET /admin/v1/devices/{id}/positions?from=&to=` | Détail device (fenêtre 24 h) |
-| `POST /admin/v1/devices/{id}/disable` `{reason}` | Désactivation |
-| `PATCH /admin/v1/clients/{uid}/access` `{disabled, reason}` | Suspension / réactivation |
-
-Contrat attendu : JSON, erreurs `{code, message, requestId}`, dates ISO-8601 UTC, pages `{items, nextCursor, hasMore}`. Le backoffice envoie `x-request-id`, `idempotency-key`, `x-staff-uid` et `x-staff-role` : le backend doit **revérifier** le rôle et ne jamais faire confiance au seul en-tête (authentifier l'appel serveur par jeton de service ou IAM).
+- **Session** : le backend n'accepte qu'un **ID token** Firebase (1 h). Le cookie HttpOnly `__session` contient donc l'ID token courant ; le SDK Web reste connecté et `<SessionSync>` re-poste chaque nouveau token à `POST /api/session` (vérification `checkRevoked`, claim `staffRole`, MFA). Un 401 de l'API redirige vers `/login?reason=session_revoked`.
+- **Transport** (`lib/admin-api/core.ts`) : `Authorization: Bearer`, `X-Request-Id` par appel, `Idempotency-Key` sur les mutations, `cache: 'no-store'`, timeout 20 s, déballage de l'enveloppe `{success, message, data}` ; les erreurs portent le statut HTTP (pas de code machine) et le `requestId`.
+- **Lectures via l'API** : devices (+ véhicules orphelins), détail et positions 24 h, notes client, journal d'audit, santé. Les compteurs du parc parcourent toutes les pages de `GET /devices` (cache partagé 60 s, invalidé après chaque mutation de device).
+- **Lectures Admin SDK** inchangées : clients, abonnements, compteurs, véhicules (projections sans `traccarPassword` / `fcmToken`).
+- **Mode démo** : une implémentation mémoire du contrat (`lib/admin-api/demo-backend.ts`) applique les mêmes règles (rôles, liste blanche, motif, `changed: false`, idempotence 409/422, 404/409 de rattachement), si bien que le mode démo et les tests passent par le même code que la production.
+- **Index Firestore** : `firestore.indexes.json` contient les index `admin_audit_logs (filtre + createdAt desc)` et `admin_client_notes (clientId, createdAt desc)` attendus par le backend.
 
 ## Points de sécurité à traiter avant la production (spec §9)
 
@@ -85,4 +85,4 @@ Contrat attendu : JSON, erreurs `{code, message, requestId}`, dates ISO-8601 UTC
 
 ## Reste à faire
 
-Écrans Abonnements (ajustement via `POST /admin/v1/subscriptions/{uid}/adjustments`), Activité métier, Documents (liens temporaires signés côté serveur), Santé système (Cloud Logging / Monitoring), Journal d'audit paginé ; réconciliation RevenueCat avant tout chiffre financier ; flux temps réel staff si le backend l'ouvre.
+Activité métier, Documents (liens temporaires signés côté serveur), Santé système (Cloud Logging / Monitoring), Journal d'audit paginé ; réconciliation RevenueCat avant tout chiffre financier ; flux temps réel staff si le backend l'ouvre.

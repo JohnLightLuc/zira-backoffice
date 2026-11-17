@@ -7,7 +7,7 @@ import type { StaffSession } from "@/lib/auth/session";
 
 /** Page frame: sidebar on --zira-primary, header with global search, environment and profile (spec §4). */
 export function AppShell({ staff, env, counts, children }: { staff: StaffSession; env: "production" | "staging" | "development"; counts: Record<string, number>; children: ReactNode }) {
-  const hidden = [!can(staff.role, "audit:read") && "audit", !can(staff.role, "health:read") && "health"].filter(Boolean) as string[];
+  const hidden = [!can(staff.role, "audit:read") && "audit", !can(staff.role, "health:read") && "health", !can(staff.role, "staff:manage") && "staff"].filter(Boolean) as string[];
   return (
     <div className={clsx("zr zr-shell", env === "production" && "zr-shell--prod")}>
       <a href="#contenu" className="skip-link">Aller au contenu</a>

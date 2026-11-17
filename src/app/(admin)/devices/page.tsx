@@ -1,16 +1,18 @@
 import Link from "next/link";
 import { X } from "lucide-react";
 import { Alert, ChipLink, EmptyState, iconProps, LINK_UI, MetricCard, PageHeader, SignalAge, StatusBadge } from "@/components/ui";
-import { SearchField } from "@/components/client";
-import { DisableDeviceButton } from "@/components/actions";
+import { DeviceDisabledButton } from "@/components/actions";
+import { DeviceEditForm, DeviceLinkForm } from "@/components/forms";
 import { requirePagePermission } from "@/lib/auth/session";
 import { can } from "@/lib/auth/rbac";
-import { DEVICE_FILTERS, devicesQuerySchema, getDevice, getDeviceCounts, getDevicesPage, type DeviceFilter, type DevicesQuery } from "@/lib/data/devices";
+import { DEVICE_FILTERS, devicesQuerySchema, getDevice, getDeviceCounts, getDevicesPage, ISSUE_LABEL, ORPHAN_LABEL, type DeviceFilter, type DevicesQuery } from "@/lib/data/devices";
+import { orNull, settle } from "@/lib/data/safe";
+import { AdminApiError } from "@/lib/admin-api/core";
 import { fmtDateTime, fmtNumber } from "@/lib/format";
 
 export const metadata = { title: "Parc & GPS" };
 
-const FILTER_LABEL: Record<DeviceFilter, string> = { all: "Tous", silent: "Silencieux", never: "Jamais vus", disabled: "Désactivés", inconsistent: "Incohérents" };
+const FILTER_LABEL: Record<DeviceFilter, string> = { all: "Tous", silent: "Silencieux", never: "Jamais vus", disabled: "Désactivés", unlinked: "Sans véhicule" };
 
 function href(q: DevicesQuery, patch: Partial<Record<keyof DevicesQuery, string | number | undefined>>) {
   const m = { ...q, cursor: undefined, ...patch } as Record<string, unknown>;
@@ -23,11 +25,13 @@ function href(q: DevicesQuery, patch: Partial<Record<keyof DevicesQuery, string 
 export default async function DevicesPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const staff = await requirePagePermission("devices:read");
   const q = devicesQuerySchema.parse(await searchParams);
-  const [page, counts, selected] = await Promise.all([
-    getDevicesPage(q, staff).catch(() => null),
-    getDeviceCounts(q.staleMinutes, staff).catch(() => null),
-    q.device ? getDevice(q.device, staff).catch(() => null) : Promise.resolve(null),
+  const [pageRes, counts, selected] = await Promise.all([
+    settle(getDevicesPage(q)),
+    orNull(getDeviceCounts(q.staleMinutes)),
+    q.device ? orNull(getDevice(q.device)) : Promise.resolve(null),
   ]);
+  const page = pageRes.ok ? pageRes.data : null;
+  const err = !pageRes.ok && pageRes.error instanceof AdminApiError ? pageRes.error : null;
   const now = Date.now();
   const canWrite = can(staff.role, "devices:write");
 
@@ -39,9 +43,24 @@ export default async function DevicesPage({ searchParams }: { searchParams: Prom
         actions={<span className="zr-muted" style={{ fontSize: 13 }}>Données à {fmtDateTime(new Date(now).toISOString())} · actualisation manuelle</span>}
       />
 
-      {page?.source === "not_connected" && (
-        <Alert tone="warning" title="Source Traccar non connectée">
-          Le parc multi-clients nécessite les routes GET /admin/v1/devices, /devices/stats et /devices/{"{id}"}/positions côté backend Zira (spec §8). Rien n&apos;est lu directement depuis Traccar.
+      {err && (err.status === 502 || err.status === 504) && (
+        <Alert tone="danger" title="GPS indisponible">{err.message} <Link className="zr-link" href={href(q, {})}>Réessayer</Link> {err.requestId && <span className="zr-code">{err.requestId}</span>}</Alert>
+      )}
+      {err && err.status === 503 && !err.requestId && (
+        <Alert tone="warning" title="API d'administration non configurée">Renseigner ADMIN_API_URL (fleet_backend, routes /admin/v1). Rien n&apos;est lu directement depuis Traccar.</Alert>
+      )}
+
+      {page?.orphans && page.orphans.length > 0 && (
+        <Alert tone="warning" title={`Véhicules orphelins (${page.orphans.length})`}>
+          <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+            {page.orphans.map((o) => (
+              <li key={o.vehicleId}>
+                <span className="zr-code">{o.plate ?? o.vehicleId}</span> → device <span className="zr-code">{o.deviceId ?? "—"}</span> : {ORPHAN_LABEL[o.reason]}
+                {o.ownerUid && <> · <Link className="zr-link" href={`/clients/${encodeURIComponent(o.ownerUid)}`}>client</Link></>}
+              </li>
+            ))}
+          </ul>
+          Signalé, jamais corrigé automatiquement.
         </Alert>
       )}
 
@@ -49,21 +68,21 @@ export default async function DevicesPage({ searchParams }: { searchParams: Prom
         <MetricCard label="En ligne" period={`< ${q.staleMinutes} min`} value={fmtNumber(counts?.online)} unit={counts ? `/ ${fmtNumber(counts.total)}` : undefined} />
         <MetricCard label="Silencieux" period={`> ${q.staleMinutes} min`} value={fmtNumber(counts?.silent)} status={{ tone: "maintenance", label: "à surveiller" }} />
         <MetricCard label="Jamais vus" period="Total" value={fmtNumber(counts?.neverSeen)} status={{ tone: "inactive", label: "aucune position" }} />
-        <MetricCard label="Incohérences" period="Total" value={fmtNumber(counts?.inconsistent)} status={{ tone: "inactive", label: "rattachement" }} />
+        <MetricCard label="Incohérences" period="Total" value={fmtNumber(counts?.inconsistent)} status={{ tone: "inactive", label: "devices + véhicules orphelins" }} />
       </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
         <div className="zr-card zr-table-wrap" style={{ flex: "999 1 640px", minWidth: 0 }}>
           <div className="zr-table-toolbar">
-            <div style={{ flex: "1 1 260px", maxWidth: 360 }}><SearchField placeholder="Nom, ID Traccar, uniqueId, plaque" label="Rechercher un device" /></div>
+            {q.clientId && <ChipLink href={href(q, { clientId: undefined })} on>Client {q.clientId} ✕</ChipLink>}
             <div className="zr-chips">
               {DEVICE_FILTERS.map((f) => <ChipLink key={f} href={href(q, { status: f, device: undefined })} on={q.status === f}>{f === "silent" ? `Silencieux > ${q.staleMinutes} min` : FILTER_LABEL[f]}</ChipLink>)}
             </div>
           </div>
           {!page ? (
-            <EmptyState error title="Impossible de charger les devices" text="L'API d'administration n'a pas répondu." />
+            <EmptyState error title="Impossible de charger les devices" text={err?.message ?? "L'API d'administration n'a pas répondu."} requestId={err?.requestId ?? undefined} />
           ) : page.items.length === 0 ? (
-            <EmptyState title="Aucun device" text={page.source === "not_connected" ? "Source Traccar non connectée." : "Aucun device ne correspond au filtre et à la recherche."} />
+            <EmptyState title="Aucun device" text="Aucun device ne correspond au filtre." />
           ) : (
             <div className="zr-table-scroll">
               <table className="zr-table">
@@ -76,7 +95,7 @@ export default async function DevicesPage({ searchParams }: { searchParams: Prom
                       <td><span className="zr-code">{d.uniqueId}</span></td>
                       <td>{d.ownerUid ? <><Link className="zr-link" href={`/clients/${encodeURIComponent(d.ownerUid)}`}>{d.ownerName ?? d.ownerUid}</Link><span className="zr-cell-sub">{d.vehiclePlate ?? "—"}</span></> : <span className="zr-muted">—</span>}</td>
                       <td><SignalAge lastUpdate={d.lastUpdate} disabled={d.disabled} staleMinutes={q.staleMinutes} now={now} /></td>
-                      <td><StatusBadge status={LINK_UI[d.link].tone}>{LINK_UI[d.link].label}</StatusBadge></td>
+                      <td><StatusBadge status={LINK_UI[d.link].tone}>{LINK_UI[d.link].label}</StatusBadge>{d.issues.length > 0 && <span className="zr-cell-sub">{d.issues.map((i) => ISSUE_LABEL[i]).join(" · ")}</span>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -85,7 +104,7 @@ export default async function DevicesPage({ searchParams }: { searchParams: Prom
           )}
           {page && page.items.length > 0 && (
             <div className="zr-pager">
-              <span className="zr-num">{page.items.length} device{page.items.length > 1 ? "s" : ""}{page.source === "demo" ? " (démonstration)" : ""}</span>
+              <span className="zr-num">{page.items.length} device{page.items.length > 1 ? "s" : ""}{staff.demo ? " (démonstration)" : ""}</span>
               {page.hasMore && page.nextCursor ? <Link className="zr-btn zr-btn--secondary zr-btn--sm" href={href(q, { cursor: page.nextCursor })}>Suivant</Link> : <span>Cliquez un device pour voir son détail</span>}
             </div>
           )}
@@ -99,11 +118,15 @@ export default async function DevicesPage({ searchParams }: { searchParams: Prom
             </div>
             <div className="zr-card__body" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
               <SignalAge lastUpdate={selected.lastUpdate} disabled={selected.disabled} staleMinutes={q.staleMinutes} now={now} />
-              {selected.link === "missing_in_traccar" && <Alert tone="warning" title="Incohérence">Référencé par vehicles/{selected.vehiclePlate} mais absent de Traccar.</Alert>}
-              {selected.link === "unlinked" && <Alert tone="warning" title="Incohérence">Aucun véhicule ni client ne référence ce device.</Alert>}
+              {selected.issues.length > 0 && (
+                <Alert tone="warning" title="Incohérences signalées">
+                  <ul style={{ margin: 0, paddingLeft: 18 }}>{selected.issues.map((i) => <li key={i}>{ISSUE_LABEL[i]}</li>)}</ul>
+                </Alert>
+              )}
               <dl className="zr-dl" style={{ gridTemplateColumns: "110px 1fr" }}>
                 <dt>ID Traccar</dt><dd><span className="zr-code">{selected.id}</span></dd>
                 <dt>uniqueId</dt><dd><span className="zr-code">{selected.uniqueId}</span></dd>
+                <dt>Statut Traccar</dt><dd>{selected.status ?? "—"}</dd>
                 <dt>Modèle</dt><dd>{selected.model ?? "—"}</dd>
                 <dt>Client</dt><dd>{selected.ownerName ?? "—"}</dd>
                 <dt>Véhicule</dt><dd>{selected.vehiclePlate ?? "—"}</dd>
@@ -123,11 +146,14 @@ export default async function DevicesPage({ searchParams }: { searchParams: Prom
                 ) : <p className="zr-muted" style={{ margin: 0, fontSize: 13 }}>Aucune position reçue sur la fenêtre.</p>}
                 <p className="zr-muted" style={{ margin: "8px 0 0", fontSize: 12 }}>Fenêtre bornée : 24 dernières heures.</p>
               </div>
-              {canWrite && !selected.disabled && selected.link !== "missing_in_traccar" && (
-                <DisableDeviceButton deviceId={selected.id} ownerUid={selected.ownerUid} name={selected.name} meta={`${selected.ownerName ?? "Sans client"} · ${selected.vehiclePlate ?? "—"}`} />
+              {canWrite && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  <DeviceEditForm deviceId={selected.id} ownerUid={selected.ownerUid} initial={{ name: selected.name, uniqueId: selected.uniqueId, groupId: selected.groupId, phone: selected.phone, model: selected.model, contact: selected.contact, category: selected.category }} />
+                  <DeviceDisabledButton deviceId={selected.id} ownerUid={selected.ownerUid} disabled={selected.disabled} name={selected.name} meta={`${selected.ownerName ?? "Sans client"} · ${selected.vehiclePlate ?? "—"}`} />
+                  {!selected.vehicleId && <DeviceLinkForm deviceId={selected.id} label="Rattacher à un véhicule" />}
+                </div>
               )}
               {!canWrite && <span className="zr-muted" style={{ fontSize: 12.5 }}>Désactivation réservée aux rôles support et super_admin.</span>}
-              {canWrite && selected.disabled && <span className="zr-muted" style={{ fontSize: 12.5 }}>Device déjà désactivé.</span>}
             </div>
           </section>
         )}

@@ -1,3 +1,5 @@
+import type { DeviceIssue } from "@/lib/admin-api/types";
+
 /**
  * DTOs normalised at the edge of the system (spec §12.4). Firestore field names stay in the
  * data layer; the UI only sees these shapes. Dates are ISO-8601 UTC strings.
@@ -39,10 +41,16 @@ export interface Subscription {
   autoRenew: boolean | null;
 }
 
-export type LinkState = "ok" | "missing_in_traccar" | "unlinked" | "unverified";
+/**
+ * ok: device ↔ vehicle ↔ client consistent · unlinked: no vehicle (NO_VEHICLE) ·
+ * inconsistent: other backend issues (uniqueId mismatch, several vehicles, owner…) ·
+ * missing_in_traccar: a vehicle points to a device Traccar does not return (orphan vehicle) ·
+ * unverified: admin API unreachable, nothing could be checked.
+ */
+export type LinkState = "ok" | "missing_in_traccar" | "unlinked" | "inconsistent" | "unverified";
 
 export interface Device {
-  id: string; // Traccar ID
+  id: string; // Traccar ID (numeric, kept as string for URLs)
   name: string;
   uniqueId: string;
   model: string | null;
@@ -51,8 +59,27 @@ export interface Device {
   vehicleId: string | null;
   vehiclePlate: string | null;
   disabled: boolean;
+  status: string | null; // Traccar: online | offline | unknown
   lastUpdate: string | null; // last position time, null = never seen
   link: LinkState;
+  issues: DeviceIssue[];
+}
+
+export interface DeviceDetail extends Device {
+  phone: string | null;
+  contact: string | null;
+  groupId: number | null;
+  category: string | null;
+  positions: Position[]; // most recent first
+}
+
+export interface OrphanVehicleRow {
+  vehicleId: string;
+  plate: string | null;
+  label: string | null;
+  ownerUid: string | null;
+  deviceId: string | null;
+  reason: "DEVICE_NOT_FOUND" | "DEVICE_NOT_IN_CLIENT_ACCOUNT";
 }
 
 export interface Position {
@@ -72,7 +99,8 @@ export interface FleetItem {
 
 export interface AuditEntry {
   id: string;
-  action: string;
+  action: string; // human label
+  code: string; // backend action code (client.suspend…)
   actorUid: string;
   actorName: string;
   role: string;
@@ -82,7 +110,9 @@ export interface AuditEntry {
   result: "success" | "failure" | "read";
   requestId: string;
   reason?: string;
+  error?: string;
   change?: { field: string; before: string; after: string };
+  changes?: { field: string; before: string; after: string }[];
 }
 
 export interface ClientOverview {
@@ -101,7 +131,10 @@ export interface ClientOverview {
   counts: { vehicles: number; drivers: number; assignments: number; documents: number };
   fleet: FleetItem[];
   issues: string[];
-  audit: AuditEntry[];
+  /** null = not readable for this role (viewer) or audit API unavailable */
+  audit: AuditEntry[] | null;
+  notes: { id: string; body: string; author: string; at: string | null }[] | null;
+  devicesSource: "api" | "unavailable";
 }
 
 export type Period = "day" | "week" | "month" | "custom";

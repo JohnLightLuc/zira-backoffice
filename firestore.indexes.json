@@ -1,13 +1,24 @@
 {
   "indexes": [
-    { "collectionGroup": "admin_client_index", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "plan", "order": "ASCENDING" }, { "fieldPath": "nameLower", "order": "ASCENDING" }, { "fieldPath": "__name__", "order": "ASCENDING" }] },
-    { "collectionGroup": "admin_client_index", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "subStatus", "order": "ASCENDING" }, { "fieldPath": "nameLower", "order": "ASCENDING" }, { "fieldPath": "__name__", "order": "ASCENDING" }] },
-    { "collectionGroup": "admin_client_index", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "plan", "order": "ASCENDING" }, { "fieldPath": "subStatus", "order": "ASCENDING" }, { "fieldPath": "nameLower", "order": "ASCENDING" }, { "fieldPath": "__name__", "order": "ASCENDING" }] },
-    { "collectionGroup": "admin_client_index", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "searchTokens", "arrayConfig": "CONTAINS" }, { "fieldPath": "nameLower", "order": "ASCENDING" }, { "fieldPath": "__name__", "order": "ASCENDING" }] },
-    { "collectionGroup": "admin_client_index", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "authDisabled", "order": "ASCENDING" }, { "fieldPath": "lastSignInAt", "order": "ASCENDING" }] },
-    { "collectionGroup": "admin_client_index", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "plan", "order": "ASCENDING" }, { "fieldPath": "vehicleCount", "order": "DESCENDING" }, { "fieldPath": "__name__", "order": "DESCENDING" }] },
-    { "collectionGroup": "admin_audit_logs", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "ownerUid", "order": "ASCENDING" }, { "fieldPath": "at", "order": "DESCENDING" }] },
-    { "collectionGroup": "vehicles", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "ownerId", "order": "ASCENDING" }, { "fieldPath": "deviceId", "order": "ASCENDING" }] }
+    {"collectionGroup": "admin_client_index", "queryScope": "COLLECTION", "fields": [{"fieldPath": "plan", "order": "ASCENDING"}, {"fieldPath": "nameLower", "order": "ASCENDING"}, {"fieldPath": "__name__", "order": "ASCENDING"}]},
+    {"collectionGroup": "admin_client_index", "queryScope": "COLLECTION", "fields": [{"fieldPath": "subStatus", "order": "ASCENDING"}, {"fieldPath": "nameLower", "order": "ASCENDING"}, {"fieldPath": "__name__", "order": "ASCENDING"}]},
+    {"collectionGroup": "admin_client_index", "queryScope": "COLLECTION", "fields": [{"fieldPath": "plan", "order": "ASCENDING"}, {"fieldPath": "subStatus", "order": "ASCENDING"}, {"fieldPath": "nameLower", "order": "ASCENDING"}, {"fieldPath": "__name__", "order": "ASCENDING"}]},
+    {"collectionGroup": "admin_client_index", "queryScope": "COLLECTION", "fields": [{"fieldPath": "searchTokens", "arrayConfig": "CONTAINS"}, {"fieldPath": "nameLower", "order": "ASCENDING"}, {"fieldPath": "__name__", "order": "ASCENDING"}]},
+    {"collectionGroup": "admin_client_index", "queryScope": "COLLECTION", "fields": [{"fieldPath": "authDisabled", "order": "ASCENDING"}, {"fieldPath": "lastSignInAt", "order": "ASCENDING"}]},
+    {"collectionGroup": "admin_client_index", "queryScope": "COLLECTION", "fields": [{"fieldPath": "plan", "order": "ASCENDING"}, {"fieldPath": "vehicleCount", "order": "DESCENDING"}, {"fieldPath": "__name__", "order": "DESCENDING"}]},
+    {"collectionGroup": "payment_logs", "queryScope": "COLLECTION", "fields": [{"fieldPath": "date", "order": "ASCENDING"}, {"fieldPath": "amountReceived", "order": "ASCENDING"}, {"fieldPath": "expectedAmount", "order": "ASCENDING"}]},
+    {"collectionGroup": "vehicles", "queryScope": "COLLECTION", "fields": [{"fieldPath": "ownerId", "order": "ASCENDING"}, {"fieldPath": "deviceId", "order": "ASCENDING"}]},
+    {"collectionGroup": "admin_audit_logs", "queryScope": "COLLECTION", "fields": [{"fieldPath": "targetType", "order": "ASCENDING"}, {"fieldPath": "targetId", "order": "ASCENDING"}, {"fieldPath": "createdAt", "order": "DESCENDING"}]},
+    {"collectionGroup": "admin_audit_logs", "queryScope": "COLLECTION", "fields": [{"fieldPath": "targetType", "order": "ASCENDING"}, {"fieldPath": "createdAt", "order": "DESCENDING"}]},
+    {"collectionGroup": "admin_audit_logs", "queryScope": "COLLECTION", "fields": [{"fieldPath": "actorUid", "order": "ASCENDING"}, {"fieldPath": "createdAt", "order": "DESCENDING"}]},
+    {"collectionGroup": "admin_audit_logs", "queryScope": "COLLECTION", "fields": [{"fieldPath": "action", "order": "ASCENDING"}, {"fieldPath": "createdAt", "order": "DESCENDING"}]},
+    {"collectionGroup": "admin_client_notes", "queryScope": "COLLECTION", "fields": [{"fieldPath": "clientId", "order": "ASCENDING"}, {"fieldPath": "createdAt", "order": "DESCENDING"}]},
+    {"collectionGroup": "subscriptions", "queryScope": "COLLECTION", "fields": [{"fieldPath": "status", "order": "ASCENDING"}, {"fieldPath": "endDate", "order": "ASCENDING"}, {"fieldPath": "__name__", "order": "ASCENDING"}]},
+    {"collectionGroup": "subscriptions", "queryScope": "COLLECTION", "fields": [{"fieldPath": "planId", "order": "ASCENDING"}, {"fieldPath": "endDate", "order": "ASCENDING"}, {"fieldPath": "__name__", "order": "ASCENDING"}]},
+    {"collectionGroup": "subscriptions", "queryScope": "COLLECTION", "fields": [{"fieldPath": "planId", "order": "ASCENDING"}, {"fieldPath": "status", "order": "ASCENDING"}, {"fieldPath": "endDate", "order": "ASCENDING"}, {"fieldPath": "__name__", "order": "ASCENDING"}]},
+    {"collectionGroup": "subscriptions", "queryScope": "COLLECTION", "fields": [{"fieldPath": "status", "order": "ASCENDING"}, {"fieldPath": "endDate", "order": "DESCENDING"}, {"fieldPath": "__name__", "order": "DESCENDING"}]},
+    {"collectionGroup": "subscriptions", "queryScope": "COLLECTION", "fields": [{"fieldPath": "planId", "order": "ASCENDING"}, {"fieldPath": "endDate", "order": "DESCENDING"}, {"fieldPath": "__name__", "order": "DESCENDING"}]},
+    {"collectionGroup": "subscriptions", "queryScope": "COLLECTION", "fields": [{"fieldPath": "planId", "order": "ASCENDING"}, {"fieldPath": "status", "order": "ASCENDING"}, {"fieldPath": "endDate", "order": "DESCENDING"}, {"fieldPath": "__name__", "order": "DESCENDING"}]}
   ],
   "fieldOverrides": []
 }

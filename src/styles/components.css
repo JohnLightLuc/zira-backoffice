@@ -224,3 +224,17 @@
 .zr-rot { transform: rotate(180deg); }
 .zr-table th[aria-sort="none"] .zr-icon { opacity: .45; }
 .zr-table .zr-code { white-space: nowrap; }
+
+/* Form dialogs (forms.tsx) */
+.zr-dialog--form { max-width: 560px; max-height: calc(100vh - 32px); display: flex; flex-direction: column; }
+.zr-dialog--form .zr-dialog__body { overflow-y: auto; }
+.zr-dialog--info .zr-dialog__badge { background: var(--zira-status-available-soft); color: var(--zira-status-available-ink); }
+.zr-field select { font: inherit; font-size: 14px; color: var(--zira-text-primary); padding: 9px 12px; border: 1px solid var(--zira-border-strong); border-radius: var(--zira-radius-sm); background: var(--zira-surface); min-height: 40px; }
+.zr-field select:focus { border-color: var(--zira-accent); outline: 2px solid var(--zira-focus-ring); outline-offset: 0; }
+.zr-field.is-invalid input, .zr-field.is-invalid select, .zr-field.is-invalid textarea { border-color: var(--zira-status-inactive-ink); }
+.zr-field__error { font-size: 12px; line-height: 16px; color: var(--zira-status-inactive-ink); }
+.zr-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+.zr-diff { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 4px 8px; font-size: 13px; align-items: baseline; }
+.zr-diff s { color: var(--zira-text-secondary); }
+.zr-toast { position: fixed; right: 24px; bottom: 24px; z-index: 60; max-width: 440px; }
+@media (max-width: 600px) { .zr-toast { left: 16px; right: 16px; bottom: 16px; } .zr-diff { grid-template-columns: auto 1fr; } }

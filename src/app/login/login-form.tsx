@@ -1,38 +1,55 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   getMultiFactorResolver, PhoneAuthProvider, PhoneMultiFactorGenerator, RecaptchaVerifier,
-  signInWithEmailAndPassword, signOut, type MultiFactorError, type MultiFactorResolver,
+  onAuthStateChanged, signInWithEmailAndPassword, signOut, type MultiFactorError, type MultiFactorResolver,
 } from "firebase/auth";
-import { clientAuth } from "@/lib/firebase/client";
+import { clientAuth, firebaseWebConfigured } from "@/lib/firebase/client";
 import { Alert, Button } from "@/components/ui";
 
 /**
  * Email + password, then the second factor (SMS) required for staff.
- * The ID token is sent once to /api/session, which sets an HttpOnly cookie;
- * the Firebase client session is then signed out so no token lingers in the browser.
+ * The ID token is posted to /api/session, which stores it in an HttpOnly cookie. The Firebase
+ * client session stays signed in so that the SDK refreshes the ID token (1 h) and
+ * <SessionSync> re-posts it (BACKOFFICE_API.md §2.2). Refused accounts are signed out.
+ * When the Firebase session survived but the cookie expired, the cookie is restored silently.
  */
-export function LoginForm() {
+export function LoginForm({ notice }: { notice?: string | null }) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [mfa, setMfa] = useState<{ resolver: MultiFactorResolver; verificationId: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(notice ?? null);
+  const configured = firebaseWebConfigured;
   const [busy, setBusy] = useState(false);
 
   async function exchange(idToken: string) {
     const res = await fetch("/api/session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idToken }) });
-    await signOut(clientAuth());
     if (!res.ok) {
+      await signOut(clientAuth());
       const j = await res.json().catch(() => ({}));
       throw new Error(j.message ?? "Connexion refusée.");
     }
     router.replace("/");
     router.refresh();
   }
+
+  // Silent restore: Firebase still signed in (cookie expired). A revoked account fails the forced
+  // refresh or the server check and is signed out.
+  useEffect(() => {
+    if (!firebaseWebConfigured) return;
+    const auth = clientAuth();
+    const off = onAuthStateChanged(auth, (user) => {
+      off();
+      if (!user) return;
+      user.getIdToken(true).then(exchange).catch(() => signOut(auth));
+    });
+    return off;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -86,8 +103,13 @@ export function LoginForm() {
           <span className="zr-field__help">Second facteur obligatoire pour les comptes du personnel.</span>
         </div>
       )}
+      {!configured && (
+        <Alert tone="warning" title="Firebase Web non configuré">
+          Renseignez NEXT_PUBLIC_FIREBASE_API_KEY, _AUTH_DOMAIN et _PROJECT_ID dans .env.local (même projet que le backend), puis redémarrez le serveur. Pour explorer sans Firebase : ZIRA_DEMO_MODE=true.
+        </Alert>
+      )}
       {error && <Alert tone="danger">{error}</Alert>}
-      <Button type="submit" variant="primary" disabled={busy}>{busy ? "Connexion…" : mfa ? "Valider le code" : "Se connecter"}</Button>
+      <Button type="submit" variant="primary" disabled={busy || !configured}>{busy ? "Connexion…" : mfa ? "Valider le code" : "Se connecter"}</Button>
       <div id="recaptcha" />
     </form>
   );

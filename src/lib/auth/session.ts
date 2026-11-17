@@ -6,7 +6,17 @@ import { env, isDemo } from "@/lib/env";
 import { adminAuth } from "@/lib/firebase/admin";
 import { can, ForbiddenError, isStaffRole, type Permission, type StaffRole } from "@/lib/auth/rbac";
 
+/**
+ * Staff session (BACKOFFICE_API.md §2).
+ * The admin API accepts a Firebase **ID token** (1 h), not a Firebase session cookie, so the
+ * `__session` cookie holds the current ID token. The browser keeps it fresh through
+ * `onIdTokenChanged` → POST /api/session (components/session-sync.tsx).
+ *
+ * `StaffSession` is safe to pass to components (no token). The raw token is only reachable
+ * through `getStaffToken()`, used by the admin API client.
+ */
 export const SESSION_COOKIE = "__session";
+export const SESSION_MAX_AGE = 60 * 60; // ID token lifetime
 
 export interface StaffSession {
   uid: string;
@@ -17,32 +27,52 @@ export interface StaffSession {
   demo: boolean;
 }
 
+interface VerifiedSession {
+  session: StaffSession;
+  token: string;
+}
+
 function initialsOf(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]!.toUpperCase()).join("") || "ST";
 }
 
+export function demoToken(uid: string, role: StaffRole) {
+  return `demo:${uid}:${role}`;
+}
+
 /**
- * Reads and verifies the staff session on every server request (spec §5, §8).
- * Role comes from the `staffRole` custom claim, set only by provisioning (never by the app).
- * Returns null when there is no valid staff session. Memoised per request.
+ * Verifies the cookie on every server request: `verifyIdToken(token, checkRevoked = true)` then
+ * the `staffRole` custom claim (set only by provisioning). Memoised per request.
  */
-export const getStaffSession = cache(async (): Promise<StaffSession | null> => {
+const verify = cache(async (): Promise<VerifiedSession | null> => {
   if (isDemo()) {
     const role = env().ZIRA_DEMO_ROLE;
-    return { uid: "demo-staff", email: "demo@zira.local", name: "Awa Koné", initials: "AK", role, demo: true };
+    const session = { uid: "demo-staff", email: "demo@zira.local", name: "Awa Koné", initials: "AK", role, demo: true };
+    return { session, token: demoToken(session.uid, role) };
   }
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!token) return null;
   try {
-    const decoded = await adminAuth().verifySessionCookie(token, true /* checkRevoked */);
+    const decoded = await adminAuth().verifyIdToken(token, true /* checkRevoked */);
     const role = decoded.staffRole;
     if (!isStaffRole(role)) return null;
     const name = (decoded.name as string | undefined) ?? decoded.email ?? "Opérateur";
-    return { uid: decoded.uid, email: decoded.email ?? "", name, initials: initialsOf(name), role, demo: false };
+    return { session: { uid: decoded.uid, email: decoded.email ?? "", name, initials: initialsOf(name), role, demo: false }, token };
   } catch {
     return null;
   }
 });
+
+export async function getStaffSession(): Promise<StaffSession | null> {
+  return (await verify())?.session ?? null;
+}
+
+/** Current staff ID token, forwarded as `Authorization: Bearer` to /admin/v1. Server only. */
+export async function getStaffToken(): Promise<string> {
+  const v = await verify();
+  if (!v) redirect("/login?reason=session_expired");
+  return v.token;
+}
 
 /** For pages and layouts: redirects to /login when there is no staff session. */
 export async function requireStaff(): Promise<StaffSession> {
@@ -51,7 +81,7 @@ export async function requireStaff(): Promise<StaffSession> {
   return session;
 }
 
-/** For pages: renders the 403 page via notFound-like redirect when the role lacks the permission. */
+/** For pages: renders the 403 page when the role lacks the permission. */
 export async function requirePagePermission(permission: Permission): Promise<StaffSession> {
   const session = await requireStaff();
   if (!can(session.role, permission)) redirect("/forbidden");

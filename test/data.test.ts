@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { redact, auditValue } from "@/lib/redact";
 import { clientsQuerySchema, queryClientsInMemory, searchTokens } from "@/lib/data/clients-query";
-import { matchesFilter } from "@/lib/data/devices";
+import { countDevices, linkOf, toApiQuery, toDevice, toPositions, devicesQuerySchema } from "@/lib/data/devices";
+import { diffOf, toAuditEntry } from "@/lib/data/audit";
+import { buildFleet } from "@/lib/data/clients";
+import type { AdminDeviceItem, TraccarPosition } from "@/lib/admin-api/types";
 import type { ClientRow, Device } from "@/lib/data/types";
 
 describe("masquage des données sensibles (spec §6.1, §9)", () => {
@@ -62,17 +65,73 @@ describe("pagination par curseur (spec §11 : couvre toutes les pages)", () => {
   });
 });
 
-describe("filtres devices", () => {
-  const now = Date.parse("2026-11-10T09:00:00Z");
-  const d = (lastUpdate: string | null, extra: Partial<Device> = {}): Device => ({ id: "1", name: "d", uniqueId: "u", model: null, ownerUid: "o", ownerName: null, vehicleId: null, vehiclePlate: null, disabled: false, lastUpdate, link: "ok", ...extra });
-  it("silent = active device older than the threshold", () => {
-    expect(matchesFilter(d("2026-11-10T08:00:00Z"), "silent", 30, now)).toBe(true);
-    expect(matchesFilter(d("2026-11-10T08:50:00Z"), "silent", 30, now)).toBe(false);
-    expect(matchesFilter(d("2026-11-10T08:00:00Z", { disabled: true }), "silent", 30, now)).toBe(false);
+const item = (extra: Partial<AdminDeviceItem> = {}): AdminDeviceItem => ({
+  id: 42, name: "d", uniqueId: "u", model: null, category: null, disabled: false, status: "online", lastUpdate: null, lastSeenAgeSeconds: null,
+  vehicle: { id: "veh1", label: null, plate: "AB-1", ownerId: "uid_o", uniqueId: "u" }, client: { id: "uid_o", email: "o@x.ci", name: "Owner" }, issues: [], ...extra,
+});
+
+describe("devices : mapping du contrat /admin/v1/devices", () => {
+  it("maps an API item to the UI device (string id, owner, link state)", () => {
+    const d = toDevice(item());
+    expect(d).toMatchObject({ id: "42", ownerUid: "uid_o", ownerName: "Owner", vehicleId: "veh1", vehiclePlate: "AB-1", link: "ok" });
   });
-  it("never seen and inconsistent", () => {
-    expect(matchesFilter(d(null), "never", 30, now)).toBe(true);
-    expect(matchesFilter(d(null, { link: "missing_in_traccar" }), "inconsistent", 30, now)).toBe(true);
-    expect(matchesFilter(d(null, { link: "ok" }), "inconsistent", 30, now)).toBe(false);
+  it("derives the link state from the backend issues", () => {
+    expect(linkOf([])).toBe("ok");
+    expect(linkOf(["NO_VEHICLE"])).toBe("unlinked");
+    expect(linkOf(["UNIQUE_ID_MISMATCH"])).toBe("inconsistent");
+  });
+  it("UI filters only produce documented query parameters", () => {
+    const now = Date.parse("2026-11-10T09:00:00Z");
+    const q = (status: string) => toApiQuery(devicesQuerySchema.parse({ status }), now);
+    expect(q("all")).toEqual({ clientId: undefined, cursor: undefined, limit: 50 });
+    expect(q("silent")).toMatchObject({ staleBefore: "2026-11-10T08:30:00.000Z", neverSeen: false, disabled: false });
+    expect(q("never")).toMatchObject({ neverSeen: true });
+    expect(q("disabled")).toMatchObject({ disabled: true });
+    expect(q("unlinked")).toMatchObject({ unlinked: true });
+    const allowed = ["clientId", "status", "staleBefore", "neverSeen", "disabled", "unlinked", "cursor", "limit"];
+    for (const s of ["all", "silent", "never", "disabled", "unlinked"]) for (const k of Object.keys(q(s))) expect(allowed).toContain(k);
+  });
+  it("rejects a non numeric cursor or device id from the URL", () => {
+    const q = devicesQuerySchema.parse({ cursor: "abc", device: "1;drop" });
+    expect(q.cursor).toBeUndefined();
+    expect(q.device).toBeUndefined();
+  });
+  it("positions: knots → km/h, most recent first, bounded", () => {
+    const p = (fixTime: string, speed: number) => ({ fixTime, latitude: 5, longitude: -4, speed }) as TraccarPosition;
+    const out = toPositions([p("2026-11-10T08:00:00Z", 10), p("2026-11-10T09:00:00Z", 0)], 1);
+    expect(out).toEqual([{ at: "2026-11-10T09:00:00Z", lat: 5, lon: -4, speedKmh: 0 }]);
+    expect(toPositions([p("2026-11-10T08:00:00Z", 10)])[0]!.speedKmh).toBe(19);
+  });
+  it("counts: online / silent / never seen / inconsistent incl. orphan vehicles", () => {
+    const now = Date.parse("2026-11-10T09:00:00Z");
+    const dev = (lastUpdate: string | null, extra: Partial<AdminDeviceItem> = {}) => toDevice(item({ lastUpdate, ...extra }));
+    const c = countDevices([dev("2026-11-10T08:55:00Z"), dev("2026-11-10T07:00:00Z"), dev(null, { issues: ["NO_VEHICLE"] }), dev("2026-11-10T07:00:00Z", { disabled: true })], 2, 30, now);
+    expect(c).toEqual({ total: 4, online: 1, silent: 1, neverSeen: 1, disabled: 1, inconsistent: 3 });
+  });
+});
+
+describe("fiche client : véhicules ↔ devices", () => {
+  const vehicles = [
+    { id: "v1", plate: "A", label: "", deviceId: "42", uniqueId: "u" },
+    { id: "v2", plate: "B", label: "", deviceId: "99", uniqueId: "x" },
+    { id: "v3", plate: "C", label: "", deviceId: null, uniqueId: null },
+  ];
+  it("ok / missing in Traccar / no device", () => {
+    const fleet = buildFleet(vehicles, { devices: [toDevice(item())], orphans: [] });
+    expect(fleet.map((f) => f.link)).toEqual(["ok", "missing_in_traccar", "no_device"]);
+  });
+  it("unverified when the admin API did not answer — never guessed", () => {
+    expect(buildFleet(vehicles, null).map((f) => f.link)).toEqual(["unverified", "unverified", "no_device"]);
+  });
+});
+
+describe("audit : affichage des entrées backend", () => {
+  it("diff only lists changed fields and keeps secrets masked", () => {
+    expect(diffOf({ disabled: false, a: 1 }, { disabled: true, a: 1 })).toEqual([{ field: "disabled", before: "false", after: "true" }]);
+    expect(diffOf(null, { traccarPassword: "[REDACTED]" })[0]!.after).not.toMatch(/secret/);
+  });
+  it("maps action codes to labels", () => {
+    const e = toAuditEntry({ id: "1", actorUid: "s", actorEmail: "s@z", actorRole: "support", requestId: "r", action: "client.suspend", targetType: "client", targetId: "u", result: "success", reason: "x", before: { disabled: false }, after: { disabled: true }, error: null, createdAt: "2026-11-10T00:00:00.000Z" });
+    expect(e).toMatchObject({ action: "Compte suspendu", code: "client.suspend", actorName: "s@z", change: { field: "disabled" } });
   });
 });

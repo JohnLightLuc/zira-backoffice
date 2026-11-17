@@ -1,89 +1,173 @@
 import "server-only";
 import { z } from "zod";
-import { isDemo, hasAdminApi } from "@/lib/env";
-import { demo } from "@/lib/data/demo-store";
-import { adminApi, deviceSchema, deviceStatsSchema, pageSchema, positionSchema } from "@/lib/admin-api";
+import { isDemo } from "@/lib/env";
+import { adminApi } from "@/lib/admin-api/client";
 import { minutesSince } from "@/lib/format";
-import { newRequestId } from "@/lib/format";
-import type { Device, Page, Position } from "@/lib/data/types";
-import type { StaffSession } from "@/lib/auth/session";
+import type { AdminDeviceItem, DeviceIssue, DevicesQuery as ApiDevicesQuery, OrphanVehicle, TraccarPosition } from "@/lib/admin-api/types";
+import type { Device, DeviceDetail, LinkState, OrphanVehicleRow, Page, Position } from "@/lib/data/types";
 
 /**
- * Traccar data is only reachable through the Zira admin API (spec §3, §7.4):
- * the browser never talks to Traccar, and this server never holds Traccar credentials.
+ * Traccar data is only reachable through the admin API (BACKOFFICE_API.md §5.2): the Traccar
+ * admin credentials live in the backend; neither this server nor the browser talks to Traccar.
+ * Inconsistencies are reported (badges, orphan vehicles), never corrected implicitly.
  */
-export const DEVICE_FILTERS = ["all", "silent", "never", "disabled", "inconsistent"] as const;
+export const DEVICE_FILTERS = ["all", "silent", "never", "disabled", "unlinked"] as const;
 export type DeviceFilter = (typeof DEVICE_FILTERS)[number];
 
 export const devicesQuerySchema = z.object({
   status: z.enum(DEVICE_FILTERS).catch("all").default("all"),
-  q: z.string().trim().max(80).optional().default(""),
   staleMinutes: z.coerce.number().int().min(5).max(1440).catch(30).default(30),
-  cursor: z.string().max(400).optional(),
-  device: z.string().max(40).optional(),
+  clientId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).optional().catch(undefined),
+  cursor: z.string().regex(/^\d{1,12}$/).optional().catch(undefined),
+  device: z.string().regex(/^\d{1,12}$/).optional().catch(undefined),
 });
 export type DevicesQuery = z.infer<typeof devicesQuerySchema>;
 
-export function matchesFilter(d: Device, f: DeviceFilter, staleMinutes: number, now = Date.now()): boolean {
-  const age = minutesSince(d.lastUpdate, now);
-  switch (f) {
-    case "silent": return !d.disabled && age != null && age > staleMinutes;
-    case "never": return d.lastUpdate == null;
-    case "disabled": return d.disabled;
-    case "inconsistent": return d.link === "missing_in_traccar" || d.link === "unlinked";
-    default: return true;
+export const ISSUE_LABEL: Record<DeviceIssue, string> = {
+  NO_VEHICLE: "Aucun véhicule rattaché",
+  MULTIPLE_VEHICLES: "Plusieurs véhicules pointent ce device",
+  UNIQUE_ID_MISMATCH: "uniqueId du véhicule ≠ uniqueId Traccar",
+  OWNER_NOT_FOUND: "Propriétaire du véhicule sans profil users/{uid}",
+  OWNER_NOT_LINKED_TRACCAR: "Client sans compte Traccar (traccarUserId)",
+  OWNER_NO_TRACCAR_PERMISSION: "Le compte Traccar du client ne voit pas ce device",
+};
+
+export const ORPHAN_LABEL: Record<OrphanVehicle["reason"], string> = {
+  DEVICE_NOT_FOUND: "Device inexistant dans Traccar",
+  DEVICE_NOT_IN_CLIENT_ACCOUNT: "Device absent du compte Traccar du client",
+};
+
+export function linkOf(issues: DeviceIssue[]): LinkState {
+  if (!issues.length) return "ok";
+  return issues.includes("NO_VEHICLE") ? "unlinked" : "inconsistent";
+}
+
+export function toDevice(d: AdminDeviceItem): Device {
+  return {
+    id: String(d.id),
+    name: d.name,
+    uniqueId: d.uniqueId,
+    model: d.model,
+    ownerUid: d.client?.id ?? d.vehicle?.ownerId ?? null,
+    ownerName: d.client?.name ?? d.client?.email ?? null,
+    vehicleId: d.vehicle?.id ?? null,
+    vehiclePlate: d.vehicle?.plate ?? null,
+    disabled: d.disabled,
+    status: d.status,
+    lastUpdate: d.lastUpdate,
+    link: linkOf(d.issues),
+    issues: d.issues,
+  };
+}
+
+export function toOrphan(o: OrphanVehicle): OrphanVehicleRow {
+  return { vehicleId: o.vehicle.id, plate: o.vehicle.plate, label: o.vehicle.label, ownerUid: o.vehicle.ownerId, deviceId: o.vehicle.deviceId == null ? null : String(o.vehicle.deviceId), reason: o.reason };
+}
+
+/** Speed in Traccar is in knots. Most recent first, bounded. */
+export function toPositions(list: TraccarPosition[], max = 20): Position[] {
+  return [...list]
+    .sort((a, b) => b.fixTime.localeCompare(a.fixTime))
+    .slice(0, max)
+    .map((p) => ({ at: p.fixTime, lat: p.latitude, lon: p.longitude, speedKmh: Math.round(p.speed * 1.852) }));
+}
+
+/** UI filter → documented query parameters only (strict whitelist on the backend, §4.6). */
+export function toApiQuery(q: DevicesQuery, now = Date.now()): ApiDevicesQuery {
+  const base: ApiDevicesQuery = { clientId: q.clientId, cursor: q.cursor, limit: 50 };
+  switch (q.status) {
+    case "silent": return { ...base, staleBefore: new Date(now - q.staleMinutes * 60000).toISOString(), neverSeen: false, disabled: false };
+    case "never": return { ...base, neverSeen: true };
+    case "disabled": return { ...base, disabled: true };
+    case "unlinked": return { ...base, unlinked: true };
+    default: return base;
   }
 }
 
-export type DeviceSource = "demo" | "api" | "not_connected";
-
-export async function getDevicesPage(q: DevicesQuery, staff: StaffSession): Promise<Page<Device> & { source: DeviceSource }> {
-  if (isDemo()) {
-    const term = q.q.toLowerCase();
-    const items = demo.devices
-      .filter((d) => matchesFilter(d, q.status, q.staleMinutes))
-      .filter((d) => !term || [d.name, d.id, d.uniqueId, d.vehiclePlate, d.ownerName].some((v) => v?.toLowerCase().includes(term)));
-    return { items, nextCursor: null, hasMore: false, source: "demo" };
-  }
-  if (!hasAdminApi()) return { items: [], nextCursor: null, hasMore: false, source: "not_connected" };
-  const params = new URLSearchParams({ status: q.status, staleMinutes: String(q.staleMinutes) });
-  if (q.q) params.set("q", q.q);
-  if (q.cursor) params.set("cursor", q.cursor);
-  const page = await adminApi(`/admin/v1/devices?${params}`, { schema: pageSchema(deviceSchema), staff, requestId: newRequestId() });
-  return { ...page, source: "api" };
+export interface DevicesPage extends Page<Device> {
+  orphans: OrphanVehicleRow[] | null; // first page only
 }
 
-export async function getDeviceCounts(staleMinutes: number, staff: StaffSession) {
-  if (isDemo()) {
-    const all = demo.devices;
-    const count = (f: DeviceFilter) => all.filter((d) => matchesFilter(d, f, staleMinutes)).length;
-    const online = all.filter((d) => !d.disabled && (minutesSince(d.lastUpdate) ?? Infinity) <= staleMinutes).length;
-    return { online, total: all.length, silent: count("silent"), neverSeen: count("never"), disabled: count("disabled"), inconsistent: count("inconsistent") };
-  }
-  if (!hasAdminApi()) return null;
-  const s = await adminApi(`/admin/v1/devices/stats?staleMinutes=${staleMinutes}`, { schema: deviceStatsSchema, staff, requestId: newRequestId() });
-  return { ...s, disabled: null as number | null };
+export async function getDevicesPage(q: DevicesQuery): Promise<DevicesPage> {
+  const page = await adminApi.devices(toApiQuery(q));
+  return { items: page.items.map(toDevice), nextCursor: page.nextCursor, hasMore: page.hasMore, orphans: page.orphanVehicles ? page.orphanVehicles.map(toOrphan) : null };
 }
 
-export async function getDevice(id: string, staff: StaffSession): Promise<(Device & { positions: Position[] }) | null> {
-  if (isDemo()) {
-    const d = demo.devices.find((x) => x.id === id);
-    return d ? { ...d } : null;
+/** Walks every page (limit 100). Guarded: the backend loads all of Traccar on each call. */
+async function scanDevices(query: ApiDevicesQuery = {}, maxPages = 50) {
+  const items: AdminDeviceItem[] = [];
+  let orphans: OrphanVehicle[] = [];
+  let cursor: string | undefined;
+  for (let i = 0; i < maxPages; i++) {
+    const page = await adminApi.devices({ ...query, cursor, limit: 100 });
+    items.push(...page.items);
+    if (!cursor) orphans = page.orphanVehicles ?? [];
+    if (!page.hasMore || !page.nextCursor) break;
+    cursor = page.nextCursor;
   }
-  if (!hasAdminApi()) return null;
-  const requestId = newRequestId();
+  return { items, orphans };
+}
+
+// Short shared cache for fleet-wide counts (every staff role may read devices). §9: no polling < 30 s.
+const COUNTS_TTL_MS = 60_000;
+let fleetCache: { at: number; value: Promise<Awaited<ReturnType<typeof scanDevices>>> } | null = null;
+
+export function invalidateDeviceCache() {
+  fleetCache = null;
+}
+
+async function fleetSnapshot() {
+  if (isDemo()) return scanDevices();
+  if (!fleetCache || Date.now() - fleetCache.at > COUNTS_TTL_MS) {
+    const value = scanDevices();
+    fleetCache = { at: Date.now(), value };
+    value.catch(() => { if (fleetCache?.value === value) fleetCache = null; });
+  }
+  return fleetCache.value;
+}
+
+export interface DeviceCounts {
+  online: number;
+  total: number;
+  silent: number;
+  neverSeen: number;
+  disabled: number;
+  inconsistent: number;
+}
+
+export function countDevices(items: Device[], orphanCount: number, staleMinutes: number, now = Date.now()): DeviceCounts {
+  const active = items.filter((d) => !d.disabled);
+  const age = (d: Device) => minutesSince(d.lastUpdate, now);
+  return {
+    total: items.length,
+    online: active.filter((d) => (age(d) ?? Infinity) <= staleMinutes).length,
+    silent: active.filter((d) => { const a = age(d); return a != null && a > staleMinutes; }).length,
+    neverSeen: items.filter((d) => d.lastUpdate == null).length,
+    disabled: items.length - active.length,
+    inconsistent: items.filter((d) => d.link !== "ok").length + orphanCount,
+  };
+}
+
+export async function getDeviceCounts(staleMinutes: number): Promise<DeviceCounts> {
+  const { items, orphans } = await fleetSnapshot();
+  return countDevices(items.map(toDevice), orphans.length, staleMinutes);
+}
+
+export async function getDevice(id: string): Promise<DeviceDetail> {
+  const n = Number(id);
   const to = new Date();
-  const from = new Date(to.getTime() - 24 * 3600 * 1000); // bounded window (spec §11)
-  const [device, positions] = await Promise.all([
-    adminApi(`/admin/v1/devices/${encodeURIComponent(id)}`, { schema: deviceSchema, staff, requestId }),
-    adminApi(`/admin/v1/devices/${encodeURIComponent(id)}/positions?from=${from.toISOString()}&to=${to.toISOString()}`, { schema: pageSchema(positionSchema), staff, requestId }),
+  const from = new Date(to.getTime() - 24 * 3600 * 1000); // default window 24 h (≤ 7 days, §5.2)
+  const [d, positions] = await Promise.all([
+    adminApi.device(n),
+    adminApi.positions(n, from.toISOString(), to.toISOString()).catch(() => [] as TraccarPosition[]),
   ]);
-  return { ...device, positions: positions.items.slice(0, 20) };
+  const base = toDevice(d);
+  const list = positions.length ? positions : d.lastPosition ? [d.lastPosition] : [];
+  return { ...base, phone: d.phone, contact: d.contact, groupId: d.groupId, category: d.category, positions: toPositions(list) };
 }
 
-export async function getDevicesForOwner(ownerUid: string, staff: StaffSession): Promise<Device[]> {
-  if (isDemo()) return demo.devices.filter((d) => d.ownerUid === ownerUid);
-  if (!hasAdminApi()) throw new Error("ADMIN_API_NOT_CONFIGURED");
-  const page = await adminApi(`/admin/v1/devices?clientId=${encodeURIComponent(ownerUid)}`, { schema: pageSchema(deviceSchema), staff, requestId: newRequestId() });
-  return page.items;
+/** Devices of a client's Traccar account (+ orphan vehicles of that client). */
+export async function getDevicesForOwner(ownerUid: string): Promise<{ devices: Device[]; orphans: OrphanVehicleRow[] }> {
+  const { items, orphans } = await scanDevices({ clientId: ownerUid }, 10);
+  return { devices: items.map(toDevice), orphans: orphans.map(toOrphan) };
 }
